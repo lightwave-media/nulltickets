@@ -2,7 +2,7 @@
     .name = .nulltickets,
     .version = "2026.3.2",
     .fingerprint = 0x8d7cc7c0ca874218,
-    .minimum_zig_version = "0.15.2",
+    .minimum_zig_version = "0.16.0",
     .dependencies = .{
         .sqlite3 = .{
             .path = "deps/sqlite",

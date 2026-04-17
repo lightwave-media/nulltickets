@@ -51,7 +51,7 @@ You do not have to use all three components.
 
 ## Tech Stack
 
-- Zig `0.15.2`
+- Zig `0.16.0`
 - SQLite (vendored, static dependency)
 - JSON over HTTP/1.1
 

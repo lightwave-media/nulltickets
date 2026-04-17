@@ -1,5 +1,9 @@
 name: CI
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  ZIG_VERSION: "0.16.0"
+
 on:
   push:
     branches: [main]
@@ -28,17 +32,17 @@ jobs:
             zig_target: x86_64-windows
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - name: Install Zig 0.15.2
-        uses: mlugg/setup-zig@v2
-        with:
-          version: 0.15.2
+      - name: Install Zig 0.16.0
+        run: bash .github/scripts/install-zig.sh "${ZIG_VERSION}"
 
-      - name: Cache .zig-cache
-        uses: actions/cache@v4
+      - name: Cache Zig build outputs
+        uses: actions/cache@v5
         with:
-          path: .zig-cache
+          path: |
+            .zig-cache
+            ~/.cache/zig
           key: zig-${{ matrix.target }}-${{ hashFiles('src/**/*.zig', 'build.zig', 'build.zig.zon', 'deps/sqlite/**') }}
           restore-keys: zig-${{ matrix.target }}-
 
@@ -87,7 +91,7 @@ jobs:
 
       - name: Upload binary
         if: success()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: nulltickets-${{ matrix.target }}
           path: zig-out/bin/nulltickets${{ runner.os == 'Windows' && '.exe' || '' }}

@@ -1,5 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const std_compat = @import("compat.zig");
 const config_mod = @import("config.zig");
 
 pub fn run(allocator: std.mem.Allocator, json_str: []const u8) !void {
@@ -38,7 +39,7 @@ pub fn run(allocator: std.mem.Allocator, json_str: []const u8) !void {
     try writeFileAtHome(allocator, home, "config.json", config_json);
 
     if (!builtin.is_test) {
-        const stdout = std.fs.File.stdout();
+        const stdout = std_compat.fs.File.stdout();
         try stdout.writeAll("{\"status\":\"ok\"}\n");
     }
 }
@@ -59,17 +60,14 @@ fn getU16(obj: std.json.ObjectMap, key: []const u8) ?u16 {
 
 fn ensureHome(home: []const u8) !void {
     if (std.fs.path.isAbsolute(home)) {
-        std.fs.makeDirAbsolute(home) catch |err| switch (err) {
+        std_compat.fs.makeDirAbsolute(home) catch |err| switch (err) {
             error.PathAlreadyExists => {},
             else => return err,
         };
         return;
     }
 
-    std.fs.cwd().makePath(home) catch |err| switch (err) {
-        error.PathAlreadyExists => {},
-        else => return err,
-    };
+    try std_compat.fs.cwd().makePath(home);
 }
 
 fn writeFileAtHome(allocator: std.mem.Allocator, home: []const u8, name: []const u8, contents: []const u8) !void {
@@ -77,14 +75,14 @@ fn writeFileAtHome(allocator: std.mem.Allocator, home: []const u8, name: []const
     defer allocator.free(path);
 
     if (std.fs.path.isAbsolute(home)) {
-        const file = try std.fs.createFileAbsolute(path, .{});
+        const file = try std_compat.fs.createFileAbsolute(path, .{});
         defer file.close();
         try file.writeAll(contents);
         try file.writeAll("\n");
         return;
     }
 
-    const file = try std.fs.cwd().createFile(path, .{});
+    const file = try std_compat.fs.cwd().createFile(path, .{});
     defer file.close();
     try file.writeAll(contents);
     try file.writeAll("\n");

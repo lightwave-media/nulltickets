@@ -1,4 +1,5 @@
 const std = @import("std");
+const std_compat = @import("compat.zig");
 const store_mod = @import("store.zig");
 const Store = store_mod.Store;
 const ids = @import("ids.zig");
@@ -357,24 +358,24 @@ fn handleHealth(ctx: *Context) HttpResponse {
     };
     defer ctx.store.freeHealthStats(&stats);
 
-    var buf: std.ArrayListUnmanaged(u8) = .empty;
-    var w = buf.writer(ctx.allocator);
+    var out: std.Io.Writer.Allocating = .init(ctx.allocator);
+    const w = &out.writer;
     w.writeAll("{") catch return serverError(ctx.allocator);
-    writeStringField(&w, ctx.allocator, "status", "ok") catch return serverError(ctx.allocator);
+    writeStringField(w, ctx.allocator, "status", "ok") catch return serverError(ctx.allocator);
     w.writeAll(",") catch return serverError(ctx.allocator);
-    writeStringField(&w, ctx.allocator, "version", version) catch return serverError(ctx.allocator);
+    writeStringField(w, ctx.allocator, "version", version) catch return serverError(ctx.allocator);
     w.writeAll(",\"tasks_by_stage\":[") catch return serverError(ctx.allocator);
     for (stats.tasks_by_stage, 0..) |sc, i| {
         if (i > 0) w.writeAll(",") catch return serverError(ctx.allocator);
         w.writeAll("{") catch return serverError(ctx.allocator);
-        writeStringField(&w, ctx.allocator, "stage", sc.stage) catch return serverError(ctx.allocator);
+        writeStringField(w, ctx.allocator, "stage", sc.stage) catch return serverError(ctx.allocator);
         w.print(",\"count\":{d}", .{sc.count}) catch return serverError(ctx.allocator);
         w.writeAll("}") catch return serverError(ctx.allocator);
     }
     w.print("],\"active_leases\":{d}", .{stats.active_leases}) catch return serverError(ctx.allocator);
     w.writeAll("}") catch return serverError(ctx.allocator);
 
-    return .{ .status = "200 OK", .body = buf.items };
+    return .{ .status = "200 OK", .body = out.written() };
 }
 
 fn handleOpenApi() HttpResponse {
@@ -584,16 +585,16 @@ fn handleListPipelines(ctx: *Context) HttpResponse {
     const pipelines = ctx.store.listPipelines() catch return serverError(ctx.allocator);
     defer ctx.store.freePipelineRows(pipelines);
 
-    var buf: std.ArrayListUnmanaged(u8) = .empty;
-    var w = buf.writer(ctx.allocator);
+    var out: std.Io.Writer.Allocating = .init(ctx.allocator);
+    const w = &out.writer;
     w.writeAll("[") catch return serverError(ctx.allocator);
     for (pipelines, 0..) |p, i| {
         if (i > 0) w.writeAll(",") catch return serverError(ctx.allocator);
-        writePipelineJson(&w, ctx.allocator, p) catch return serverError(ctx.allocator);
+        writePipelineJson(w, ctx.allocator, p) catch return serverError(ctx.allocator);
     }
     w.writeAll("]") catch return serverError(ctx.allocator);
 
-    return .{ .status = "200 OK", .body = buf.items };
+    return .{ .status = "200 OK", .body = out.written() };
 }
 
 fn handleGetPipeline(ctx: *Context, id: []const u8) HttpResponse {
@@ -602,10 +603,10 @@ fn handleGetPipeline(ctx: *Context, id: []const u8) HttpResponse {
     };
     defer ctx.store.freePipelineRow(p);
 
-    var buf: std.ArrayListUnmanaged(u8) = .empty;
-    var w = buf.writer(ctx.allocator);
-    writePipelineJson(&w, ctx.allocator, p) catch return serverError(ctx.allocator);
-    return .{ .status = "200 OK", .body = buf.items };
+    var out: std.Io.Writer.Allocating = .init(ctx.allocator);
+    const w = &out.writer;
+    writePipelineJson(w, ctx.allocator, p) catch return serverError(ctx.allocator);
+    return .{ .status = "200 OK", .body = out.written() };
 }
 
 fn handleCreateTask(ctx: *Context, body: []const u8) HttpResponse {
@@ -707,8 +708,8 @@ fn handleBulkCreateTasks(ctx: *Context, body: []const u8) HttpResponse {
     ctx.store.execSimple("COMMIT;") catch return serverError(ctx.allocator);
     should_rollback = false;
 
-    var buf: std.ArrayListUnmanaged(u8) = .empty;
-    var w = buf.writer(ctx.allocator);
+    var out: std.Io.Writer.Allocating = .init(ctx.allocator);
+    const w = &out.writer;
     w.writeAll("{\"ids\":[") catch return serverError(ctx.allocator);
     for (created_ids.items, 0..) |id, i| {
         if (i > 0) w.writeAll(",") catch return serverError(ctx.allocator);
@@ -717,7 +718,7 @@ fn handleBulkCreateTasks(ctx: *Context, body: []const u8) HttpResponse {
     }
     w.writeAll("]}") catch return serverError(ctx.allocator);
 
-    return .{ .status = "201 Created", .body = buf.items, .status_code = 201 };
+    return .{ .status = "201 Created", .body = out.written(), .status_code = 201 };
 }
 
 fn handleListTasks(ctx: *Context, query: ?[]const u8) HttpResponse {
@@ -743,12 +744,12 @@ fn handleListTasks(ctx: *Context, query: ?[]const u8) HttpResponse {
     const page = ctx.store.listTasksPage(stage, pipeline_id, cursor_created_at_ms, cursor_id, limit) catch return serverError(ctx.allocator);
     defer ctx.store.freeTaskPage(page);
 
-    var buf: std.ArrayListUnmanaged(u8) = .empty;
-    var w = buf.writer(ctx.allocator);
+    var out: std.Io.Writer.Allocating = .init(ctx.allocator);
+    const w = &out.writer;
     w.writeAll("{\"items\":[") catch return serverError(ctx.allocator);
     for (page.items, 0..) |t, i| {
         if (i > 0) w.writeAll(",") catch return serverError(ctx.allocator);
-        writeTaskJson(&w, ctx.allocator, t) catch return serverError(ctx.allocator);
+        writeTaskJson(w, ctx.allocator, t) catch return serverError(ctx.allocator);
     }
     w.writeAll("],\"next_cursor\":") catch return serverError(ctx.allocator);
     if (page.next_cursor) |next_cursor| {
@@ -759,7 +760,7 @@ fn handleListTasks(ctx: *Context, query: ?[]const u8) HttpResponse {
     }
     w.writeAll("}") catch return serverError(ctx.allocator);
 
-    return .{ .status = "200 OK", .body = buf.items };
+    return .{ .status = "200 OK", .body = out.written() };
 }
 
 fn handleGetTask(ctx: *Context, id: []const u8) HttpResponse {
@@ -768,24 +769,24 @@ fn handleGetTask(ctx: *Context, id: []const u8) HttpResponse {
     };
     defer ctx.store.freeTaskDetails(details);
 
-    var buf: std.ArrayListUnmanaged(u8) = .empty;
-    var w = buf.writer(ctx.allocator);
+    var out: std.Io.Writer.Allocating = .init(ctx.allocator);
+    const w = &out.writer;
     w.writeAll("{") catch return serverError(ctx.allocator);
-    writeTaskJsonFields(&w, ctx.allocator, details.task) catch return serverError(ctx.allocator);
+    writeTaskJsonFields(w, ctx.allocator, details.task) catch return serverError(ctx.allocator);
 
     // Latest run
     if (details.latest_run) |run| {
         w.writeAll(",\"latest_run\":{") catch return serverError(ctx.allocator);
-        writeRunFields(&w, ctx.allocator, run) catch return serverError(ctx.allocator);
+        writeRunFields(w, ctx.allocator, run) catch return serverError(ctx.allocator);
         w.writeAll("}") catch return serverError(ctx.allocator);
     }
 
-    writeDependencyRows(&w, ctx.allocator, details.dependencies) catch return serverError(ctx.allocator);
-    writeAssignmentRows(&w, ctx.allocator, details.assignments) catch return serverError(ctx.allocator);
-    writeTaskTransitions(&w, ctx.allocator, details.available_transitions) catch return serverError(ctx.allocator);
+    writeDependencyRows(w, ctx.allocator, details.dependencies) catch return serverError(ctx.allocator);
+    writeAssignmentRows(w, ctx.allocator, details.assignments) catch return serverError(ctx.allocator);
+    writeTaskTransitions(w, ctx.allocator, details.available_transitions) catch return serverError(ctx.allocator);
 
     w.writeAll("}") catch return serverError(ctx.allocator);
-    return .{ .status = "200 OK", .body = buf.items };
+    return .{ .status = "200 OK", .body = out.written() };
 }
 
 fn handleClaim(ctx: *Context, body: []const u8) HttpResponse {
@@ -813,21 +814,21 @@ fn handleClaim(ctx: *Context, body: []const u8) HttpResponse {
 
     if (result) |claim| {
         defer ctx.store.freeClaimResult(claim);
-        var buf: std.ArrayListUnmanaged(u8) = .empty;
-        var w = buf.writer(ctx.allocator);
+        var out: std.Io.Writer.Allocating = .init(ctx.allocator);
+        const w = &out.writer;
         w.writeAll("{\"task\":") catch return serverError(ctx.allocator);
-        writeTaskJson(&w, ctx.allocator, claim.task) catch return serverError(ctx.allocator);
+        writeTaskJson(w, ctx.allocator, claim.task) catch return serverError(ctx.allocator);
         w.writeAll(",\"run\":{") catch return serverError(ctx.allocator);
-        writeRunFields(&w, ctx.allocator, claim.run) catch return serverError(ctx.allocator);
+        writeRunFields(w, ctx.allocator, claim.run) catch return serverError(ctx.allocator);
         w.writeAll("}") catch return serverError(ctx.allocator);
         w.writeAll(",") catch return serverError(ctx.allocator);
-        writeStringField(&w, ctx.allocator, "lease_id", claim.lease_id) catch return serverError(ctx.allocator);
+        writeStringField(w, ctx.allocator, "lease_id", claim.lease_id) catch return serverError(ctx.allocator);
         w.writeAll(",") catch return serverError(ctx.allocator);
-        writeStringField(&w, ctx.allocator, "lease_token", claim.lease_token) catch return serverError(ctx.allocator);
+        writeStringField(w, ctx.allocator, "lease_token", claim.lease_token) catch return serverError(ctx.allocator);
         w.print(",\"expires_at_ms\":{d}", .{claim.expires_at_ms}) catch return serverError(ctx.allocator);
         w.writeAll("}") catch return serverError(ctx.allocator);
 
-        return .{ .status = "200 OK", .body = buf.items };
+        return .{ .status = "200 OK", .body = out.written() };
     } else {
         return .{ .status = "204 No Content", .body = "", .status_code = 204 };
     }
@@ -892,16 +893,16 @@ fn handleListEvents(ctx: *Context, run_id: []const u8, query: ?[]const u8) HttpR
     const page = ctx.store.listEventsPage(run_id, cursor_id, limit) catch return serverError(ctx.allocator);
     defer ctx.store.freeEventPage(page);
 
-    var buf: std.ArrayListUnmanaged(u8) = .empty;
-    var w = buf.writer(ctx.allocator);
+    var out: std.Io.Writer.Allocating = .init(ctx.allocator);
+    const w = &out.writer;
     w.writeAll("{\"items\":[") catch return serverError(ctx.allocator);
     for (page.items, 0..) |e, i| {
         if (i > 0) w.writeAll(",") catch return serverError(ctx.allocator);
         w.writeAll("{") catch return serverError(ctx.allocator);
         w.print("\"id\":{d},", .{e.id}) catch return serverError(ctx.allocator);
-        writeStringField(&w, ctx.allocator, "run_id", e.run_id) catch return serverError(ctx.allocator);
+        writeStringField(w, ctx.allocator, "run_id", e.run_id) catch return serverError(ctx.allocator);
         w.print(",\"ts_ms\":{d},", .{e.ts_ms}) catch return serverError(ctx.allocator);
-        writeStringField(&w, ctx.allocator, "kind", e.kind) catch return serverError(ctx.allocator);
+        writeStringField(w, ctx.allocator, "kind", e.kind) catch return serverError(ctx.allocator);
         w.print(",\"data\":{s}", .{e.data_json}) catch return serverError(ctx.allocator);
         w.writeAll("}") catch return serverError(ctx.allocator);
     }
@@ -914,7 +915,7 @@ fn handleListEvents(ctx: *Context, run_id: []const u8, query: ?[]const u8) HttpR
     }
     w.writeAll("}") catch return serverError(ctx.allocator);
 
-    return .{ .status = "200 OK", .body = buf.items };
+    return .{ .status = "200 OK", .body = out.written() };
 }
 
 fn handleTransition(ctx: *Context, run_id: []const u8, body: []const u8, raw_request: []const u8) HttpResponse {
@@ -955,16 +956,16 @@ fn handleTransition(ctx: *Context, run_id: []const u8, body: []const u8, raw_req
     };
     defer ctx.store.freeTransitionResult(result);
 
-    var buf: std.ArrayListUnmanaged(u8) = .empty;
-    var w = buf.writer(ctx.allocator);
+    var out: std.Io.Writer.Allocating = .init(ctx.allocator);
+    const w = &out.writer;
     w.writeAll("{") catch return serverError(ctx.allocator);
-    writeStringField(&w, ctx.allocator, "previous_stage", result.previous_stage) catch return serverError(ctx.allocator);
+    writeStringField(w, ctx.allocator, "previous_stage", result.previous_stage) catch return serverError(ctx.allocator);
     w.writeAll(",") catch return serverError(ctx.allocator);
-    writeStringField(&w, ctx.allocator, "new_stage", result.new_stage) catch return serverError(ctx.allocator);
+    writeStringField(w, ctx.allocator, "new_stage", result.new_stage) catch return serverError(ctx.allocator);
     w.writeAll(",") catch return serverError(ctx.allocator);
-    writeStringField(&w, ctx.allocator, "trigger", result.trigger) catch return serverError(ctx.allocator);
+    writeStringField(w, ctx.allocator, "trigger", result.trigger) catch return serverError(ctx.allocator);
     w.writeAll("}") catch return serverError(ctx.allocator);
-    const resp = buf.items;
+    const resp = out.written();
     return .{ .status = "200 OK", .body = resp };
 }
 
@@ -1040,23 +1041,23 @@ fn handleListArtifacts(ctx: *Context, query: ?[]const u8) HttpResponse {
     const page = ctx.store.listArtifactsPage(task_id, run_id, cursor_created_at_ms, cursor_id, limit) catch return serverError(ctx.allocator);
     defer ctx.store.freeArtifactPage(page);
 
-    var buf: std.ArrayListUnmanaged(u8) = .empty;
-    var w = buf.writer(ctx.allocator);
+    var out: std.Io.Writer.Allocating = .init(ctx.allocator);
+    const w = &out.writer;
     w.writeAll("{\"items\":[") catch return serverError(ctx.allocator);
     for (page.items, 0..) |a, i| {
         if (i > 0) w.writeAll(",") catch return serverError(ctx.allocator);
         w.writeAll("{") catch return serverError(ctx.allocator);
-        writeStringField(&w, ctx.allocator, "id", a.id) catch return serverError(ctx.allocator);
+        writeStringField(w, ctx.allocator, "id", a.id) catch return serverError(ctx.allocator);
         w.writeAll(",") catch return serverError(ctx.allocator);
-        writeNullableStringField(&w, ctx.allocator, "task_id", a.task_id) catch return serverError(ctx.allocator);
+        writeNullableStringField(w, ctx.allocator, "task_id", a.task_id) catch return serverError(ctx.allocator);
         w.writeAll(",") catch return serverError(ctx.allocator);
-        writeNullableStringField(&w, ctx.allocator, "run_id", a.run_id) catch return serverError(ctx.allocator);
+        writeNullableStringField(w, ctx.allocator, "run_id", a.run_id) catch return serverError(ctx.allocator);
         w.print(",\"created_at_ms\":{d},", .{a.created_at_ms}) catch return serverError(ctx.allocator);
-        writeStringField(&w, ctx.allocator, "kind", a.kind) catch return serverError(ctx.allocator);
+        writeStringField(w, ctx.allocator, "kind", a.kind) catch return serverError(ctx.allocator);
         w.writeAll(",") catch return serverError(ctx.allocator);
-        writeStringField(&w, ctx.allocator, "uri", a.uri) catch return serverError(ctx.allocator);
+        writeStringField(w, ctx.allocator, "uri", a.uri) catch return serverError(ctx.allocator);
         w.writeAll(",") catch return serverError(ctx.allocator);
-        writeNullableStringField(&w, ctx.allocator, "sha256", a.sha256_hex) catch return serverError(ctx.allocator);
+        writeNullableStringField(w, ctx.allocator, "sha256", a.sha256_hex) catch return serverError(ctx.allocator);
         w.writeAll(",") catch return serverError(ctx.allocator);
         if (a.size_bytes) |sb| {
             w.print("\"size_bytes\":{d}", .{sb}) catch return serverError(ctx.allocator);
@@ -1075,7 +1076,7 @@ fn handleListArtifacts(ctx: *Context, query: ?[]const u8) HttpResponse {
     }
     w.writeAll("}") catch return serverError(ctx.allocator);
 
-    return .{ .status = "200 OK", .body = buf.items };
+    return .{ .status = "200 OK", .body = out.written() };
 }
 
 fn handleAddTaskDependency(ctx: *Context, task_id: []const u8, body: []const u8) HttpResponse {
@@ -1103,18 +1104,18 @@ fn handleListTaskDependencies(ctx: *Context, task_id: []const u8) HttpResponse {
     const deps = ctx.store.listTaskDependencies(task_id) catch return serverError(ctx.allocator);
     defer ctx.store.freeDependencyRows(deps);
 
-    var buf: std.ArrayListUnmanaged(u8) = .empty;
-    var w = buf.writer(ctx.allocator);
+    var out: std.Io.Writer.Allocating = .init(ctx.allocator);
+    const w = &out.writer;
     w.writeAll("[") catch return serverError(ctx.allocator);
     for (deps, 0..) |dep, i| {
         if (i > 0) w.writeAll(",") catch return serverError(ctx.allocator);
         w.writeAll("{") catch return serverError(ctx.allocator);
-        writeStringField(&w, ctx.allocator, "depends_on_task_id", dep.depends_on_task_id) catch return serverError(ctx.allocator);
+        writeStringField(w, ctx.allocator, "depends_on_task_id", dep.depends_on_task_id) catch return serverError(ctx.allocator);
         w.print(",\"resolved\":{s}", .{if (dep.resolved) "true" else "false"}) catch return serverError(ctx.allocator);
         w.writeAll("}") catch return serverError(ctx.allocator);
     }
     w.writeAll("]") catch return serverError(ctx.allocator);
-    return .{ .status = "200 OK", .body = buf.items };
+    return .{ .status = "200 OK", .body = out.written() };
 }
 
 fn handleAssignTask(ctx: *Context, task_id: []const u8, body: []const u8) HttpResponse {
@@ -1140,17 +1141,17 @@ fn handleListTaskAssignments(ctx: *Context, task_id: []const u8) HttpResponse {
     const rows = ctx.store.listTaskAssignments(task_id) catch return serverError(ctx.allocator);
     defer ctx.store.freeAssignmentRows(rows);
 
-    var buf: std.ArrayListUnmanaged(u8) = .empty;
-    var w = buf.writer(ctx.allocator);
+    var out: std.Io.Writer.Allocating = .init(ctx.allocator);
+    const w = &out.writer;
     w.writeAll("[") catch return serverError(ctx.allocator);
     for (rows, 0..) |row, i| {
         if (i > 0) w.writeAll(",") catch return serverError(ctx.allocator);
         w.writeAll("{") catch return serverError(ctx.allocator);
-        writeStringField(&w, ctx.allocator, "task_id", row.task_id) catch return serverError(ctx.allocator);
+        writeStringField(w, ctx.allocator, "task_id", row.task_id) catch return serverError(ctx.allocator);
         w.writeAll(",") catch return serverError(ctx.allocator);
-        writeStringField(&w, ctx.allocator, "agent_id", row.agent_id) catch return serverError(ctx.allocator);
+        writeStringField(w, ctx.allocator, "agent_id", row.agent_id) catch return serverError(ctx.allocator);
         w.writeAll(",") catch return serverError(ctx.allocator);
-        writeNullableStringField(&w, ctx.allocator, "assigned_by", row.assigned_by) catch return serverError(ctx.allocator);
+        writeNullableStringField(w, ctx.allocator, "assigned_by", row.assigned_by) catch return serverError(ctx.allocator);
         w.print(",\"active\":{s},\"created_at_ms\":{d},\"updated_at_ms\":{d}", .{
             if (row.active) "true" else "false",
             row.created_at_ms,
@@ -1159,7 +1160,7 @@ fn handleListTaskAssignments(ctx: *Context, task_id: []const u8) HttpResponse {
         w.writeAll("}") catch return serverError(ctx.allocator);
     }
     w.writeAll("]") catch return serverError(ctx.allocator);
-    return .{ .status = "200 OK", .body = buf.items };
+    return .{ .status = "200 OK", .body = out.written() };
 }
 
 fn handleUnassignTask(ctx: *Context, task_id: []const u8, agent_id: []const u8) HttpResponse {
@@ -1185,13 +1186,13 @@ fn handleQueueOps(ctx: *Context, query: ?[]const u8) HttpResponse {
     const rows = ctx.store.getQueueRoleStats(near_expiry_ms, stuck_ms) catch return serverError(ctx.allocator);
     defer ctx.store.freeQueueRoleStats(rows);
 
-    var buf: std.ArrayListUnmanaged(u8) = .empty;
-    var w = buf.writer(ctx.allocator);
+    var out: std.Io.Writer.Allocating = .init(ctx.allocator);
+    const w = &out.writer;
     w.writeAll("{\"roles\":[") catch return serverError(ctx.allocator);
     for (rows, 0..) |row, i| {
         if (i > 0) w.writeAll(",") catch return serverError(ctx.allocator);
         w.writeAll("{") catch return serverError(ctx.allocator);
-        writeStringField(&w, ctx.allocator, "role", row.role) catch return serverError(ctx.allocator);
+        writeStringField(w, ctx.allocator, "role", row.role) catch return serverError(ctx.allocator);
         w.print(",\"claimable_count\":{d}", .{row.claimable_count}) catch return serverError(ctx.allocator);
         w.writeAll(",\"oldest_claimable_age_ms\":") catch return serverError(ctx.allocator);
         if (row.oldest_claimable_age_ms) |age| {
@@ -1207,9 +1208,9 @@ fn handleQueueOps(ctx: *Context, query: ?[]const u8) HttpResponse {
         w.writeAll("}") catch return serverError(ctx.allocator);
     }
     w.writeAll("],") catch return serverError(ctx.allocator);
-    w.print("\"generated_at_ms\":{d}", .{std.time.milliTimestamp()}) catch return serverError(ctx.allocator);
+    w.print("\"generated_at_ms\":{d}", .{std_compat.time.milliTimestamp()}) catch return serverError(ctx.allocator);
     w.writeAll("}") catch return serverError(ctx.allocator);
-    return .{ .status = "200 OK", .body = buf.items };
+    return .{ .status = "200 OK", .body = out.written() };
 }
 
 // ===== JSON helpers =====
@@ -1377,16 +1378,16 @@ fn handleStorePut(ctx: *Context, namespace: []const u8, key: []const u8, body: [
 fn handleStoreGet(ctx: *Context, namespace: []const u8, key: []const u8) HttpResponse {
     const entry = ctx.store.storeGet(ctx.allocator, namespace, key) catch return serverError(ctx.allocator);
     if (entry) |e| {
-        var buf: std.ArrayListUnmanaged(u8) = .empty;
-        var w = buf.writer(ctx.allocator);
+        var out: std.Io.Writer.Allocating = .init(ctx.allocator);
+        const w = &out.writer;
         w.writeAll("{") catch return serverError(ctx.allocator);
-        writeStringField(&w, ctx.allocator, "namespace", e.namespace) catch return serverError(ctx.allocator);
+        writeStringField(w, ctx.allocator, "namespace", e.namespace) catch return serverError(ctx.allocator);
         w.writeAll(",") catch return serverError(ctx.allocator);
-        writeStringField(&w, ctx.allocator, "key", e.key) catch return serverError(ctx.allocator);
+        writeStringField(w, ctx.allocator, "key", e.key) catch return serverError(ctx.allocator);
         w.print(",\"value\":{s}", .{e.value_json}) catch return serverError(ctx.allocator);
         w.print(",\"created_at_ms\":{d},\"updated_at_ms\":{d}", .{ e.created_at_ms, e.updated_at_ms }) catch return serverError(ctx.allocator);
         w.writeAll("}") catch return serverError(ctx.allocator);
-        return .{ .status = "200 OK", .body = buf.items };
+        return .{ .status = "200 OK", .body = out.written() };
     } else {
         return respondError(ctx.allocator, 404, "not_found", "Key not found");
     }
@@ -1395,21 +1396,21 @@ fn handleStoreGet(ctx: *Context, namespace: []const u8, key: []const u8) HttpRes
 fn handleStoreList(ctx: *Context, namespace: []const u8) HttpResponse {
     const entries = ctx.store.storeList(ctx.allocator, namespace) catch return serverError(ctx.allocator);
 
-    var buf: std.ArrayListUnmanaged(u8) = .empty;
-    var w = buf.writer(ctx.allocator);
+    var out: std.Io.Writer.Allocating = .init(ctx.allocator);
+    const w = &out.writer;
     w.writeAll("[") catch return serverError(ctx.allocator);
     for (entries, 0..) |e, i| {
         if (i > 0) w.writeAll(",") catch return serverError(ctx.allocator);
         w.writeAll("{") catch return serverError(ctx.allocator);
-        writeStringField(&w, ctx.allocator, "namespace", e.namespace) catch return serverError(ctx.allocator);
+        writeStringField(w, ctx.allocator, "namespace", e.namespace) catch return serverError(ctx.allocator);
         w.writeAll(",") catch return serverError(ctx.allocator);
-        writeStringField(&w, ctx.allocator, "key", e.key) catch return serverError(ctx.allocator);
+        writeStringField(w, ctx.allocator, "key", e.key) catch return serverError(ctx.allocator);
         w.print(",\"value\":{s}", .{e.value_json}) catch return serverError(ctx.allocator);
         w.print(",\"created_at_ms\":{d},\"updated_at_ms\":{d}", .{ e.created_at_ms, e.updated_at_ms }) catch return serverError(ctx.allocator);
         w.writeAll("}") catch return serverError(ctx.allocator);
     }
     w.writeAll("]") catch return serverError(ctx.allocator);
-    return .{ .status = "200 OK", .body = buf.items };
+    return .{ .status = "200 OK", .body = out.written() };
 }
 
 fn handleStoreDelete(ctx: *Context, namespace: []const u8, key: []const u8) HttpResponse {
@@ -1425,8 +1426,8 @@ fn handleStoreDeleteNamespace(ctx: *Context, namespace: []const u8) HttpResponse
 fn sanitizeFts5Query(allocator: std.mem.Allocator, raw: []const u8) ?[]const u8 {
     // Split on whitespace, wrap each token in double quotes (escaping internal quotes).
     // This turns arbitrary user input into safe FTS5 literal phrases.
-    var buf: std.ArrayListUnmanaged(u8) = .empty;
-    var w = buf.writer(allocator);
+    var out: std.Io.Writer.Allocating = .init(allocator);
+    const w = &out.writer;
     var first = true;
     var it = std.mem.tokenizeAny(u8, raw, " \t\n\r");
     while (it.next()) |token| {
@@ -1443,7 +1444,7 @@ fn sanitizeFts5Query(allocator: std.mem.Allocator, raw: []const u8) ?[]const u8 
         w.writeAll("\"") catch return null;
     }
     if (first) return null; // all whitespace / empty
-    return buf.items;
+    return out.written();
 }
 
 fn handleStoreSearch(ctx: *Context, query: ?[]const u8) HttpResponse {
@@ -1465,21 +1466,21 @@ fn handleStoreSearch(ctx: *Context, query: ?[]const u8) HttpResponse {
 
     const entries = ctx.store.storeSearch(ctx.allocator, namespace, sanitized, limit, filter_path, filter_value) catch return serverError(ctx.allocator);
 
-    var buf: std.ArrayListUnmanaged(u8) = .empty;
-    var w = buf.writer(ctx.allocator);
+    var out: std.Io.Writer.Allocating = .init(ctx.allocator);
+    const w = &out.writer;
     w.writeAll("[") catch return serverError(ctx.allocator);
     for (entries, 0..) |e, i| {
         if (i > 0) w.writeAll(",") catch return serverError(ctx.allocator);
         w.writeAll("{") catch return serverError(ctx.allocator);
-        writeStringField(&w, ctx.allocator, "namespace", e.namespace) catch return serverError(ctx.allocator);
+        writeStringField(w, ctx.allocator, "namespace", e.namespace) catch return serverError(ctx.allocator);
         w.writeAll(",") catch return serverError(ctx.allocator);
-        writeStringField(&w, ctx.allocator, "key", e.key) catch return serverError(ctx.allocator);
+        writeStringField(w, ctx.allocator, "key", e.key) catch return serverError(ctx.allocator);
         w.print(",\"value\":{s}", .{e.value_json}) catch return serverError(ctx.allocator);
         w.print(",\"created_at_ms\":{d},\"updated_at_ms\":{d}", .{ e.created_at_ms, e.updated_at_ms }) catch return serverError(ctx.allocator);
         w.writeAll("}") catch return serverError(ctx.allocator);
     }
     w.writeAll("]") catch return serverError(ctx.allocator);
-    return .{ .status = "200 OK", .body = buf.items };
+    return .{ .status = "200 OK", .body = out.written() };
 }
 
 fn jsonStringify(allocator: std.mem.Allocator, value: std.json.Value) ![]const u8 {
@@ -1652,7 +1653,7 @@ pub fn extractHeader(raw: []const u8, name: []const u8) ?[]const u8 {
         if (std.mem.indexOfScalar(u8, line, ':')) |colon| {
             const hdr_key = line[0..colon];
             if (std.ascii.eqlIgnoreCase(hdr_key, name)) {
-                return std.mem.trimLeft(u8, line[colon + 1 ..], " ");
+                return std_compat.mem.trimLeft(u8, line[colon + 1 ..], " ");
             }
         }
     }

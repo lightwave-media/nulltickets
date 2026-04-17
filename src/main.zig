@@ -1,27 +1,28 @@
 const std = @import("std");
+const std_compat = @import("compat.zig");
 const Store = @import("store.zig").Store;
 const api = @import("api.zig");
 const config = @import("config.zig");
 
 const version = "2026.3.2";
 
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+pub fn main(init: std.process.Init) !void {
+    std_compat.initProcess(init);
+    const allocator = std.heap.smp_allocator;
 
-    var args = try std.process.argsWithAllocator(allocator);
-    defer args.deinit();
-    _ = args.next(); // skip program name
+    const args = try std_compat.process.argsAlloc(allocator);
+    defer std_compat.process.argsFree(allocator, args);
 
     // Check for manifest protocol flags before normal arg parsing
-    if (args.next()) |first_arg| {
+    if (args.len > 1) {
+        const first_arg = args[1];
         if (std.mem.eql(u8, first_arg, "--export-manifest")) {
             try @import("export_manifest.zig").run();
             return;
         }
         if (std.mem.eql(u8, first_arg, "--from-json")) {
-            if (args.next()) |json_str| {
+            if (args.len > 2) {
+                const json_str = args[2];
                 try @import("from_json.zig").run(allocator, json_str);
             } else {
                 std.debug.print("error: --from-json requires a JSON argument\n", .{});
@@ -31,34 +32,39 @@ pub fn main() !void {
         }
     }
 
-    // Re-parse all args for normal operation
-    var args2 = try std.process.argsWithAllocator(allocator);
-    defer args2.deinit();
-    _ = args2.next(); // skip program name
-
     var port_override: ?u16 = null;
     var db_override: ?[:0]const u8 = null;
     var token_override: ?[]const u8 = null;
     var config_path_override: ?[]const u8 = null;
 
-    while (args2.next()) |arg| {
+    var arg_index: usize = 1;
+    while (arg_index < args.len) : (arg_index += 1) {
+        const arg = args[arg_index];
         if (std.mem.eql(u8, arg, "--port")) {
-            if (args2.next()) |val| {
+            if (arg_index + 1 < args.len) {
+                arg_index += 1;
+                const val = args[arg_index];
                 port_override = std.fmt.parseInt(u16, val, 10) catch {
                     std.debug.print("invalid port: {s}\n", .{val});
                     return;
                 };
             }
         } else if (std.mem.eql(u8, arg, "--db")) {
-            if (args2.next()) |val| {
+            if (arg_index + 1 < args.len) {
+                arg_index += 1;
+                const val = args[arg_index];
                 db_override = val;
             }
         } else if (std.mem.eql(u8, arg, "--token")) {
-            if (args2.next()) |val| {
+            if (arg_index + 1 < args.len) {
+                arg_index += 1;
+                const val = args[arg_index];
                 token_override = val;
             }
         } else if (std.mem.eql(u8, arg, "--config")) {
-            if (args2.next()) |val| {
+            if (arg_index + 1 < args.len) {
+                arg_index += 1;
+                const val = args[arg_index];
                 config_path_override = val;
             }
         } else if (std.mem.eql(u8, arg, "--version")) {
@@ -109,24 +115,24 @@ pub fn main() !void {
     var store = try Store.init(allocator, db_path);
     defer store.deinit();
 
-    const addr = std.net.Address.resolveIp("127.0.0.1", port) catch |err| {
+    const addr = std.Io.net.IpAddress.resolve(std_compat.io(), "127.0.0.1", port) catch |err| {
         std.debug.print("failed to resolve address: {}\n", .{err});
         return;
     };
-    var server = addr.listen(.{ .reuse_address = true }) catch |err| {
+    var server = addr.listen(std_compat.io(), .{ .reuse_address = true }) catch |err| {
         std.debug.print("failed to listen on port {d}: {}\n", .{ port, err });
         return;
     };
-    defer server.deinit();
+    defer server.deinit(std_compat.io());
 
     std.debug.print("listening on http://127.0.0.1:{d}\n", .{port});
 
     while (true) {
-        const conn = server.accept() catch |err| {
+        var conn = server.accept(std_compat.io()) catch |err| {
             std.debug.print("accept error: {}\n", .{err});
             continue;
         };
-        defer conn.stream.close();
+        defer conn.close(std_compat.io());
 
         // Per-request arena
         var arena = std.heap.ArenaAllocator.init(allocator);
@@ -134,42 +140,14 @@ pub fn main() !void {
         const req_alloc = arena.allocator();
 
         // Read request
-        var req_buf: [max_request_size]u8 = undefined;
-        const n = conn.stream.read(&req_buf) catch continue;
-        if (n == 0) continue;
-        const raw = req_buf[0..n];
+        const full_request = readHttpRequest(req_alloc, &conn, max_request_size) catch continue orelse continue;
 
         // Parse request line
-        const first_line_end = std.mem.indexOf(u8, raw, "\r\n") orelse continue;
-        const first_line = raw[0..first_line_end];
+        const first_line_end = std.mem.indexOf(u8, full_request, "\r\n") orelse continue;
+        const first_line = full_request[0..first_line_end];
         var parts = std.mem.splitScalar(u8, first_line, ' ');
         const method = parts.next() orelse continue;
         const target = parts.next() orelse continue;
-
-        // Read remaining body if Content-Length indicates more data
-        var full_request = raw;
-        if (api.extractHeader(raw, "Content-Length")) |cl_str| {
-            const content_length = std.fmt.parseInt(usize, cl_str, 10) catch 0;
-            if (content_length > 0) {
-                const header_end_pos = std.mem.indexOf(u8, raw, "\r\n\r\n") orelse continue;
-                const body_start = header_end_pos + 4;
-                const body_received = n - body_start;
-                if (body_received < content_length) {
-                    // Need to read more
-                    const total_size = body_start + content_length;
-                    if (total_size > max_request_size) continue;
-                    const full_buf = req_alloc.alloc(u8, total_size) catch continue;
-                    @memcpy(full_buf[0..n], raw);
-                    var total_read = n;
-                    while (total_read < total_size) {
-                        const extra = conn.stream.read(full_buf[total_read..total_size]) catch break;
-                        if (extra == 0) break;
-                        total_read += extra;
-                    }
-                    full_request = full_buf[0..total_read];
-                }
-            }
-        }
 
         const body = api.extractBody(full_request);
 
@@ -187,8 +165,11 @@ pub fn main() !void {
             "HTTP/1.1 {s}\r\nContent-Type: application/json\r\nContent-Length: {d}\r\nConnection: close\r\n\r\n",
             .{ response.status, response.body.len },
         ) catch continue;
-        _ = conn.stream.write(header) catch continue;
-        _ = conn.stream.write(response.body) catch continue;
+        var resp_write_buffer: [1024]u8 = undefined;
+        var writer = conn.writer(std_compat.io(), &resp_write_buffer);
+        writer.interface.writeAll(header) catch continue;
+        writer.interface.writeAll(response.body) catch continue;
+        writer.interface.flush() catch continue;
     }
 }
 
@@ -199,17 +180,56 @@ fn ensureParentDirForFile(path: []const u8) !void {
     if (parent.len == 0) return;
 
     if (std.fs.path.isAbsolute(parent)) {
-        std.fs.makeDirAbsolute(parent) catch |err| switch (err) {
+        std_compat.fs.makeDirAbsolute(parent) catch |err| switch (err) {
             error.PathAlreadyExists => {},
             else => return err,
         };
         return;
     }
 
-    std.fs.cwd().makePath(parent) catch |err| switch (err) {
-        error.PathAlreadyExists => {},
-        else => return err,
-    };
+    try std_compat.fs.cwd().makePath(parent);
 }
 
 const max_request_size: usize = 65_536;
+const request_read_chunk: usize = 4096;
+
+fn readHttpRequest(allocator: std.mem.Allocator, stream: *std.Io.net.Stream, max_bytes: usize) !?[]u8 {
+    var buffer: std.ArrayListUnmanaged(u8) = .empty;
+    defer buffer.deinit(allocator);
+
+    var read_buffer: [request_read_chunk]u8 = undefined;
+    var reader = stream.reader(std_compat.io(), &read_buffer);
+
+    while (true) {
+        const line = reader.interface.takeDelimiterInclusive('\n') catch |err| switch (err) {
+            error.EndOfStream => {
+                if (buffer.items.len == 0) return null;
+                return error.UnexpectedEof;
+            },
+            else => |e| return e,
+        };
+
+        try buffer.appendSlice(allocator, line);
+        if (buffer.items.len > max_bytes) return error.RequestTooLarge;
+
+        if (std.mem.eql(u8, line, "\r\n") or std.mem.eql(u8, line, "\n")) break;
+    }
+
+    const header_end = std.mem.indexOf(u8, buffer.items, "\r\n\r\n") orelse return error.InvalidRequest;
+    const content_len = if (api.extractHeader(buffer.items[0 .. header_end + 4], "Content-Length")) |cl_str|
+        (std.fmt.parseInt(usize, cl_str, 10) catch return error.InvalidContentLength)
+    else
+        0;
+
+    const required = header_end + 4 + content_len;
+    if (required > max_bytes) return error.RequestTooLarge;
+
+    if (content_len > 0) {
+        const body = try allocator.alloc(u8, content_len);
+        defer allocator.free(body);
+        try reader.interface.readSliceAll(body);
+        try buffer.appendSlice(allocator, body);
+    }
+
+    return try allocator.dupe(u8, buffer.items[0..required]);
+}

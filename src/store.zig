@@ -1,4 +1,5 @@
 const std = @import("std");
+const std_compat = @import("compat.zig");
 const log = std.log.scoped(.store);
 const ids = @import("ids.zig");
 const domain = @import("domain.zig");
@@ -402,7 +403,7 @@ pub const Store = struct {
 
         const lease_sql = "SELECT COUNT(*) FROM leases WHERE expires_at_ms > ?;";
         var lease_stmt: ?*c.sqlite3_stmt = null;
-        const now_ms: i64 = std.time.milliTimestamp();
+        const now_ms: i64 = std_compat.time.milliTimestamp();
         rc = c.sqlite3_prepare_v2(self.db, lease_sql, -1, &lease_stmt, null);
         if (rc != c.SQLITE_OK) return error.PrepareFailed;
         defer _ = c.sqlite3_finalize(lease_stmt);
@@ -2420,9 +2421,9 @@ test "claim respects per-state concurrency limits" {
     defer store.freeOwnedString(t3);
 
     // Set per-state concurrency limit of 2 for "review"
-    var concurrency_map = std.json.ObjectMap.init(alloc);
+    var concurrency_map: std.json.ObjectMap = .empty;
     defer concurrency_map.deinit();
-    try concurrency_map.put("review", .{ .integer = 2 });
+    try concurrency_map.put(alloc, "review", .{ .integer = 2 });
     const per_state: std.json.Value = .{ .object = concurrency_map };
 
     // Claim first two tasks — should succeed

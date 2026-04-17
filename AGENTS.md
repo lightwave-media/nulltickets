@@ -72,7 +72,7 @@ bash tests/test_e2e.sh
 
 ## 4) Zig + SQLite Rules
 
-- Zig baseline: `0.15.2`.
+- Zig baseline: `0.16.0`.
 - Use `std.ArrayListUnmanaged(...)=.empty` correctly with allocator on each call.
 - Do not rely on allocator leaks for correctness.
 - Use `SQLITE_STATIC` (`null`) for sqlite text/blob binds in this codebase.

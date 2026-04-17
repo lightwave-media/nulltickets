@@ -1,5 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const std_compat = @import("compat.zig");
 
 pub const home_env_var = "NULLTICKETS_HOME";
 pub const home_dir_name = ".nulltickets";
@@ -19,7 +20,7 @@ pub fn resolveConfigPath(allocator: std.mem.Allocator, override_path: ?[]const u
 }
 
 pub fn resolveHomeDir(allocator: std.mem.Allocator) ![]const u8 {
-    if (std.process.getEnvVarOwned(allocator, home_env_var)) |env_home| {
+    if (std_compat.process.getEnvVarOwned(allocator, home_env_var)) |env_home| {
         return env_home;
     } else |err| switch (err) {
         error.EnvironmentVariableNotFound => {},
@@ -35,7 +36,7 @@ pub fn resolveHomeDir(allocator: std.mem.Allocator) ![]const u8 {
 /// The caller should provide an arena allocator since returned slices may point
 /// to parser-owned allocations.
 pub fn loadFromFile(allocator: std.mem.Allocator, path: []const u8) !Config {
-    const file = std.fs.cwd().openFile(path, .{}) catch |err| {
+    const file = std_compat.fs.cwd().openFile(path, .{}) catch |err| {
         if (err == error.FileNotFound) return Config{};
         return err;
     };
@@ -58,10 +59,10 @@ fn resolveRelativePath(allocator: std.mem.Allocator, config_path: []const u8, va
 }
 
 fn getHomeDirOwned(allocator: std.mem.Allocator) ![]u8 {
-    return std.process.getEnvVarOwned(allocator, "HOME") catch |err| switch (err) {
+    return std_compat.process.getEnvVarOwned(allocator, "HOME") catch |err| switch (err) {
         error.EnvironmentVariableNotFound => {
             if (builtin.os.tag == .windows) {
-                return std.process.getEnvVarOwned(allocator, "USERPROFILE") catch error.HomeNotSet;
+                return std_compat.process.getEnvVarOwned(allocator, "USERPROFILE") catch error.HomeNotSet;
             }
             return error.HomeNotSet;
         },

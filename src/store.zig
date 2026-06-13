@@ -1256,6 +1256,22 @@ pub const Store = struct {
         defer pipeline_def.deinit();
         const transition = pipeline_def.findTransition(current_stage, trigger) orelse return error.InvalidTransition;
 
+        // Converge gate enforcement: a transition declaring required_gates only
+        // fires when the run's latest verdict event satisfies every gate.
+        // Fail-closed — no verdict, a malformed verdict, or blockers>0 blocks
+        // the transition (the errdefer ROLLBACK above unwinds the open
+        // transaction on the early return). This is what makes the review gate
+        // enforceable server-side: a reviewer cannot escalate/approve past a
+        // blocker, and a missing review cannot advance at all.
+        if (transition.required_gates) |gates| {
+            if (gates.len > 0) {
+                const blockers = try latestVerdictBlockers(self, temp_alloc, run_id);
+                for (gates) |gate| {
+                    if (!gateSatisfied(gate, blockers)) return error.GateNotSatisfied;
+                }
+            }
+        }
+
         // Update run
         {
             const upd = try self.prepare("UPDATE runs SET status = 'completed', ended_at_ms = ?, usage_json = ? WHERE id = ?;");
@@ -2422,7 +2438,7 @@ test "claim respects per-state concurrency limits" {
 
     // Set per-state concurrency limit of 2 for "review"
     var concurrency_map: std.json.ObjectMap = .empty;
-    defer concurrency_map.deinit();
+    defer concurrency_map.deinit(alloc);
     try concurrency_map.put(alloc, "review", .{ .integer = 2 });
     const per_state: std.json.Value = .{ .object = concurrency_map };
 
@@ -2527,4 +2543,93 @@ test "fail run with retry policy" {
     defer store.freeTaskRow(task_after_1);
     try std.testing.expect(task_after_1.next_eligible_at_ms > 0);
     try std.testing.expect(task_after_1.dead_letter_reason == null);
+}
+
+// ===== Converge gate enforcement =====
+
+/// Latest `blockers` count from the run's most recent `verdict` event, or null
+/// if no verdict event exists or it carries no numeric `blockers` field. The
+/// converge gate treats null as "no usable verdict" → fail closed.
+fn latestVerdictBlockers(store: *Store, alloc: std.mem.Allocator, run_id: []const u8) !?i64 {
+    const stmt = try store.prepare("SELECT data_json FROM events WHERE run_id = ? AND kind = 'verdict' ORDER BY id DESC LIMIT 1;");
+    defer _ = c.sqlite3_finalize(stmt);
+    store.bindText(stmt, 1, run_id);
+    if (c.sqlite3_step(stmt) != c.SQLITE_ROW) return null;
+    const data_json = store.colTextView(stmt, 0);
+    var parsed = std.json.parseFromSlice(
+        struct { blockers: ?i64 = null },
+        alloc,
+        data_json,
+        .{ .ignore_unknown_fields = true },
+    ) catch return null;
+    defer parsed.deinit();
+    return parsed.value.blockers;
+}
+
+/// Converge gate vocabulary. Fail-closed by construction: an unknown gate, a
+/// missing verdict, or a verdict without a numeric `blockers` count is NOT
+/// satisfied — a gated transition cannot fire without an affirmative,
+/// well-formed verdict. You cannot escalate/approve past a blocker (or past a
+/// missing review).
+fn gateSatisfied(gate: []const u8, blockers: ?i64) bool {
+    if (std.mem.eql(u8, gate, "no-blockers")) {
+        return if (blockers) |b| b == 0 else false;
+    }
+    return false; // unknown gate → fail closed
+}
+
+const CONVERGE_PIPELINE =
+    \\{"initial":"review","states":{"review":{"agent_role":"reviewer"},"approved":{"terminal":true},"blocked":{"terminal":true}},"transitions":[{"from":"review","to":"approved","trigger":"approve","required_gates":["no-blockers"]},{"from":"review","to":"blocked","trigger":"block"}]}
+;
+
+test "gateSatisfied is fail-closed" {
+    try std.testing.expect(gateSatisfied("no-blockers", 0));
+    try std.testing.expect(!gateSatisfied("no-blockers", 3));
+    try std.testing.expect(!gateSatisfied("no-blockers", null)); // no verdict → fail closed
+    try std.testing.expect(!gateSatisfied("unknown-gate", 0)); // unknown gate → fail closed
+}
+
+test "transition gate blocks approve without a clean verdict" {
+    const alloc = std.testing.allocator;
+    var store = try Store.init(alloc, ":memory:");
+    defer store.deinit();
+
+    const pipeline_id = try store.createPipeline("converge-blocked", CONVERGE_PIPELINE);
+    defer store.freeOwnedString(pipeline_id);
+    const task_id = try store.createTask(pipeline_id, "Review", "desc", 0, "{}", null, 0, null);
+    defer store.freeOwnedString(task_id);
+
+    const claim = (try store.claimTask("a1", "reviewer", 300_000, null)).?;
+    defer store.freeClaimResult(claim);
+
+    // No verdict yet → the gated `approve` transition is shut.
+    try std.testing.expectError(error.GateNotSatisfied, store.transitionRun(claim.run.id, "approve", null, null, "review", null));
+
+    // Verdict with blockers>0 → still shut.
+    _ = try store.addEvent(claim.run.id, "verdict", "{\"blockers\":2}");
+    try std.testing.expectError(error.GateNotSatisfied, store.transitionRun(claim.run.id, "approve", null, null, "review", null));
+
+    // The ungated `block` transition fires regardless of the verdict.
+    const t_block = try store.transitionRun(claim.run.id, "block", null, null, "review", null);
+    defer store.freeTransitionResult(t_block);
+    try std.testing.expectEqualStrings("blocked", t_block.new_stage);
+}
+
+test "transition gate opens approve on a clean verdict" {
+    const alloc = std.testing.allocator;
+    var store = try Store.init(alloc, ":memory:");
+    defer store.deinit();
+
+    const pipeline_id = try store.createPipeline("converge-clean", CONVERGE_PIPELINE);
+    defer store.freeOwnedString(pipeline_id);
+    const task_id = try store.createTask(pipeline_id, "Review", "desc", 0, "{}", null, 0, null);
+    defer store.freeOwnedString(task_id);
+
+    const claim = (try store.claimTask("a1", "reviewer", 300_000, null)).?;
+    defer store.freeClaimResult(claim);
+
+    _ = try store.addEvent(claim.run.id, "verdict", "{\"blockers\":0,\"findings\":[]}");
+    const t = try store.transitionRun(claim.run.id, "approve", null, null, "review", null);
+    defer store.freeTransitionResult(t);
+    try std.testing.expectEqualStrings("approved", t.new_stage);
 }

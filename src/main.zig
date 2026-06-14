@@ -6,6 +6,17 @@ const config = @import("config.zig");
 
 const version = "2026.3.2";
 
+// Aggregate unit tests from the imported modules. Without this, `zig build
+// test` (root = main.zig) runs only main.zig's own test blocks and silently
+// skips every test in store.zig / api.zig / domain.zig — a documented test
+// command that executes none of the suite, the same silent-green-theater the
+// review gate this code enforces exists to prevent.
+test {
+    _ = @import("store.zig");
+    _ = @import("api.zig");
+    _ = @import("domain.zig");
+}
+
 pub fn main(init: std.process.Init) !void {
     std_compat.initProcess(init);
     const allocator = std.heap.smp_allocator;

@@ -949,6 +949,7 @@ fn handleTransition(ctx: *Context, run_id: []const u8, body: []const u8, raw_req
             error.RunNotFound => respondError(ctx.allocator, 404, "not_found", "Run not found"),
             error.RunNotRunning => respondError(ctx.allocator, 409, "conflict", "Run is not in running state"),
             error.InvalidTransition => respondError(ctx.allocator, 400, "invalid_transition", "No valid transition for this trigger from current stage"),
+            error.GateNotSatisfied => respondError(ctx.allocator, 409, "gate_not_satisfied", "Transition blocked: a required gate is not satisfied — the review verdict has blockers, is malformed, or no verdict was posted"),
             error.ExpectedStageMismatch => respondError(ctx.allocator, 409, "expected_stage_mismatch", "Current task stage does not match expected_stage"),
             error.TaskVersionMismatch => respondError(ctx.allocator, 409, "task_version_mismatch", "Current task version does not match expected_task_version"),
             else => serverError(ctx.allocator),
@@ -1695,9 +1696,12 @@ test "auth allows health without API token" {
     var store = try Store.init(std.testing.allocator, ":memory:");
     defer store.deinit();
 
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
     var ctx = Context{
         .store = &store,
-        .allocator = std.testing.allocator,
+        .allocator = arena.allocator(),
         .required_api_token = "secret",
     };
 
@@ -1709,9 +1713,12 @@ test "auth rejects protected endpoint without API token" {
     var store = try Store.init(std.testing.allocator, ":memory:");
     defer store.deinit();
 
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
     var ctx = Context{
         .store = &store,
-        .allocator = std.testing.allocator,
+        .allocator = arena.allocator(),
         .required_api_token = "secret",
     };
 
@@ -1723,9 +1730,12 @@ test "auth accepts admin token for protected endpoint" {
     var store = try Store.init(std.testing.allocator, ":memory:");
     defer store.deinit();
 
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
     var ctx = Context{
         .store = &store,
-        .allocator = std.testing.allocator,
+        .allocator = arena.allocator(),
         .required_api_token = "secret",
     };
 

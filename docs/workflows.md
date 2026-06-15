@@ -67,6 +67,26 @@ You can run `nullTickets` with one agent loop and no external orchestrator:
 
 This is enough for sequential autonomous execution.
 
+## Canonical Agile Board (reference pipeline)
+
+`src/pipelines/agile-board.pipeline.json` is a ready-to-POST pipeline encoding
+the canonical Agile ticket-lifecycle board — the runtime mirror of
+lightwave-core's `task_statuses` v3.0.0 stamp. It carries both lanes in one
+pipeline (bugs are tasks whose lane converges into the delivery lane at
+`prioritized`):
+
+- delivery: `open → considering → scoping → prioritized → in_design →
+  in_development → in_review → ready_for_deployment → closed`
+  (`considering`/`scoping` may divert to `not_doing`)
+- bug: `open → triage → awaiting_prioritization → prioritized`
+  (`triage` → `need_more_info` / `not_a_bug` / `cannot_reproduce`;
+  `need_more_info` loops back to `triage`)
+
+The `in_review → ready_for_deployment` edge carries `required_gates:
+["no-blockers"]`, so it fires only once a `verdict` event reports
+`blockers=0` (the converge gate). The board's states and edges are pinned to
+the stamp by a conformance test in `src/domain.zig`.
+
 ## When To Add Orchestrator
 
 Add an external orchestrator only when you need:

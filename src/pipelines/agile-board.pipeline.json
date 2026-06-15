@@ -1,0 +1,44 @@
+{
+  "_comment": "Canonical Agile ticket-lifecycle board, encoded as a nullTickets pipeline. Mirrors lightwave-core task_statuses v3.0.0 (the 'Agile Scrum Ceremonies & Event' board). Two lanes share one pipeline: bugs are tasks whose lane converges into the delivery lane at 'prioritized'. The diagram's orange boxes (Add to Sprint, Release Notes, Gather Info) are transition TRIGGERS here; the yellow diamonds are decision branches = multiple triggers off one state. POST this to /pipelines.",
+  "initial": "open",
+  "states": {
+    "open": { "agent_role": "groomer", "description": "Submitted and accepted; not yet groomed. Shared entry for the delivery and bug lanes." },
+    "considering": { "agent_role": "groomer", "description": "Weighed for the backlog (do-or-don't)." },
+    "scoping": { "agent_role": "groomer", "description": "Sized and scoped (do-or-don't)." },
+    "prioritized": { "agent_role": "groomer", "description": "Groomed and prioritized; ready to dispatch. Bug-lane tasks rejoin here." },
+    "in_design": { "agent_role": "designer", "description": "Added to a sprint; design in progress." },
+    "in_development": { "agent_role": "developer", "description": "Implementation in progress." },
+    "in_review": { "agent_role": "reviewer", "description": "Under review; advance is gated on a no-blockers verdict." },
+    "ready_for_deployment": { "agent_role": "release-engineer", "description": "Approved and queued for release." },
+    "closed": { "terminal": true, "description": "Released and complete (release notes published)." },
+    "not_doing": { "terminal": true, "description": "Deliberately not pursued." },
+    "triage": { "agent_role": "triager", "description": "Bug under triage: reproducible? intended? enough info?" },
+    "need_more_info": { "agent_role": "triager", "description": "Blocked pending more information; returns to triage once gathered." },
+    "awaiting_prioritization": { "agent_role": "groomer", "description": "Triaged and confirmed; waiting to rejoin the board at prioritized." },
+    "not_a_bug": { "terminal": true, "description": "Reported behaviour is intended — not a defect." },
+    "cannot_reproduce": { "terminal": true, "description": "Could not reproduce the reported defect." }
+  },
+  "transitions": [
+    { "from": "open", "to": "considering", "trigger": "groom" },
+    { "from": "open", "to": "triage", "trigger": "triage" },
+
+    { "from": "considering", "to": "scoping", "trigger": "proceed" },
+    { "from": "considering", "to": "not_doing", "trigger": "drop" },
+    { "from": "scoping", "to": "prioritized", "trigger": "prioritize" },
+    { "from": "scoping", "to": "not_doing", "trigger": "drop" },
+
+    { "from": "prioritized", "to": "in_design", "trigger": "add_to_sprint" },
+    { "from": "in_design", "to": "in_development", "trigger": "start_build" },
+    { "from": "in_development", "to": "in_review", "trigger": "submit" },
+    { "from": "in_review", "to": "ready_for_deployment", "trigger": "approve", "required_gates": ["no-blockers"] },
+    { "from": "in_review", "to": "in_development", "trigger": "reject" },
+    { "from": "ready_for_deployment", "to": "closed", "trigger": "release" },
+
+    { "from": "triage", "to": "awaiting_prioritization", "trigger": "confirm" },
+    { "from": "triage", "to": "need_more_info", "trigger": "request_info" },
+    { "from": "triage", "to": "not_a_bug", "trigger": "mark_intended" },
+    { "from": "triage", "to": "cannot_reproduce", "trigger": "mark_norepro" },
+    { "from": "need_more_info", "to": "triage", "trigger": "gather_info" },
+    { "from": "awaiting_prioritization", "to": "prioritized", "trigger": "prioritize" }
+  ]
+}
